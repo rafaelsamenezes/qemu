@@ -658,7 +658,6 @@ static int ppce500_load_device_tree(PPCE500MachineState *pms,
 
 done:
     if (!dry_run) {
-        qemu_fdt_dumpdtb(fdt, fdt_size);
         cpu_physical_memory_write(addr, fdt, fdt_size);
 
         /* Set machine->fdt for 'dumpdtb' QMP/HMP command */
@@ -1044,6 +1043,7 @@ void ppce500_init(MachineState *machine)
         dev = qdev_new(TYPE_SYSBUS_SDHCI);
         qdev_prop_set_uint8(dev, "sd-spec-version", 2);
         qdev_prop_set_uint8(dev, "endianness", DEVICE_BIG_ENDIAN);
+        qdev_prop_set_uint8(dev, "vendor", SDHCI_VENDOR_FSL);
         s = SYS_BUS_DEVICE(dev);
         sysbus_realize_and_unref(s, &error_fatal);
         sysbus_connect_irq(s, 0, qdev_get_gpio_in(mpicdev, MPC85XX_ESDHC_IRQ));
@@ -1194,7 +1194,7 @@ void ppce500_init(MachineState *machine)
 
     payload_size = load_elf(filename, NULL, NULL, NULL,
                             &bios_entry, &loadaddr, NULL, NULL,
-                            1, PPC_ELF_MACHINE, 0, 0);
+                            ELFDATA2MSB, PPC_ELF_MACHINE, 0, 0);
     if (payload_size < 0) {
         /*
          * Hrm. No ELF image? Try a uImage, maybe someone is giving us an

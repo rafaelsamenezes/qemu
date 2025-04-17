@@ -2,23 +2,22 @@
 // Author(s): Manos Pitsidianakis <manos.pitsidianakis@linaro.org>
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-use std::{
-    ffi::CStr,
-    os::raw::c_void,
-    ptr::{addr_of, addr_of_mut},
-};
+use std::{ffi::CStr, ptr::addr_of};
 
 use qemu_api::{
-    bindings::*,
+    bindings::{module_call_init, module_init_type, qdev_prop_bool},
     c_str,
     cell::{self, BqlCell},
     declare_properties, define_property,
     prelude::*,
-    qdev::{DeviceImpl, DeviceState, Property},
-    qom::ObjectImpl,
+    qdev::{DeviceImpl, DeviceState, Property, ResettablePhasesImpl},
+    qom::{ObjectImpl, ParentField},
+    sysbus::SysBusDevice,
     vmstate::VMStateDescription,
     zeroable::Zeroable,
 };
+
+mod vmstate_tests;
 
 // Test that macros can compile.
 pub static VMSTATE: VMStateDescription = VMStateDescription {
@@ -31,11 +30,21 @@ pub static VMSTATE: VMStateDescription = VMStateDescription {
 #[repr(C)]
 #[derive(qemu_api_macros::Object)]
 pub struct DummyState {
-    parent: DeviceState,
+    parent: ParentField<DeviceState>,
     migrate_clock: bool,
 }
 
 qom_isa!(DummyState: Object, DeviceState);
+
+pub struct DummyClass {
+    parent_class: <DeviceState as ObjectType>::Class,
+}
+
+impl DummyClass {
+    pub fn class_init<T: DeviceImpl>(self: &mut DummyClass) {
+        self.parent_class.class_init::<T>();
+    }
+}
 
 declare_properties! {
     DUMMY_PROPERTIES,
@@ -49,14 +58,17 @@ declare_properties! {
 }
 
 unsafe impl ObjectType for DummyState {
-    type Class = <DeviceState as ObjectType>::Class;
+    type Class = DummyClass;
     const TYPE_NAME: &'static CStr = c_str!("dummy");
 }
 
 impl ObjectImpl for DummyState {
     type ParentType = DeviceState;
     const ABSTRACT: bool = false;
+    const CLASS_INIT: fn(&mut DummyClass) = DummyClass::class_init::<Self>;
 }
+
+impl ResettablePhasesImpl for DummyState {}
 
 impl DeviceImpl for DummyState {
     fn properties() -> &'static [Property] {
@@ -64,6 +76,39 @@ impl DeviceImpl for DummyState {
     }
     fn vmsd() -> Option<&'static VMStateDescription> {
         Some(&VMSTATE)
+    }
+}
+
+#[derive(qemu_api_macros::offsets)]
+#[repr(C)]
+#[derive(qemu_api_macros::Object)]
+pub struct DummyChildState {
+    parent: ParentField<DummyState>,
+}
+
+qom_isa!(DummyChildState: Object, DeviceState, DummyState);
+
+pub struct DummyChildClass {
+    parent_class: <DummyState as ObjectType>::Class,
+}
+
+unsafe impl ObjectType for DummyChildState {
+    type Class = DummyChildClass;
+    const TYPE_NAME: &'static CStr = c_str!("dummy_child");
+}
+
+impl ObjectImpl for DummyChildState {
+    type ParentType = DummyState;
+    const ABSTRACT: bool = false;
+    const CLASS_INIT: fn(&mut DummyChildClass) = DummyChildClass::class_init::<Self>;
+}
+
+impl ResettablePhasesImpl for DummyChildState {}
+impl DeviceImpl for DummyChildState {}
+
+impl DummyChildClass {
+    pub fn class_init<T: DeviceImpl>(self: &mut DummyChildClass) {
+        self.parent_class.class_init::<T>();
     }
 }
 
@@ -83,21 +128,26 @@ fn init_qom() {
 /// Create and immediately drop an instance.
 fn test_object_new() {
     init_qom();
-    unsafe {
-        object_unref(object_new(DummyState::TYPE_NAME.as_ptr()).cast());
-    }
+    drop(DummyState::new());
+    drop(DummyChildState::new());
+}
+
+#[test]
+#[allow(clippy::redundant_clone)]
+/// Create, clone and then drop an instance.
+fn test_clone() {
+    init_qom();
+    let p = DummyState::new();
+    assert_eq!(p.clone().typename(), "dummy");
+    drop(p);
 }
 
 #[test]
 /// Try invoking a method on an object.
 fn test_typename() {
     init_qom();
-    let p: *mut DummyState = unsafe { object_new(DummyState::TYPE_NAME.as_ptr()).cast() };
-    let p_ref: &DummyState = unsafe { &*p };
-    assert_eq!(p_ref.typename(), "dummy");
-    unsafe {
-        object_unref(p_ref.as_object_mut_ptr().cast::<c_void>());
-    }
+    let p = DummyState::new();
+    assert_eq!(p.typename(), "dummy");
 }
 
 // a note on all "cast" tests: usually, especially for downcasts the desired
@@ -112,50 +162,22 @@ fn test_typename() {
 /// Test casts on shared references.
 fn test_cast() {
     init_qom();
-    let p: *mut DummyState = unsafe { object_new(DummyState::TYPE_NAME.as_ptr()).cast() };
+    let p = DummyState::new();
+    let p_ptr: *mut DummyState = p.as_mut_ptr();
+    let p_ref: &mut DummyState = unsafe { &mut *p_ptr };
 
-    let p_ref: &DummyState = unsafe { &*p };
     let obj_ref: &Object = p_ref.upcast();
-    assert_eq!(addr_of!(*obj_ref), p.cast());
+    assert_eq!(addr_of!(*obj_ref), p_ptr.cast());
 
     let sbd_ref: Option<&SysBusDevice> = obj_ref.dynamic_cast();
     assert!(sbd_ref.is_none());
 
     let dev_ref: Option<&DeviceState> = obj_ref.downcast();
-    assert_eq!(addr_of!(*dev_ref.unwrap()), p.cast());
+    assert_eq!(addr_of!(*dev_ref.unwrap()), p_ptr.cast());
 
     // SAFETY: the cast is wrong, but the value is only used for comparison
     unsafe {
         let sbd_ref: &SysBusDevice = obj_ref.unsafe_cast();
-        assert_eq!(addr_of!(*sbd_ref), p.cast());
-
-        object_unref(p_ref.as_object_mut_ptr().cast::<c_void>());
-    }
-}
-
-#[test]
-#[allow(clippy::shadow_unrelated)]
-/// Test casts on mutable references.
-fn test_cast_mut() {
-    init_qom();
-    let p: *mut DummyState = unsafe { object_new(DummyState::TYPE_NAME.as_ptr()).cast() };
-
-    let p_ref: &mut DummyState = unsafe { &mut *p };
-    let obj_ref: &mut Object = p_ref.upcast_mut();
-    assert_eq!(addr_of_mut!(*obj_ref), p.cast());
-
-    let sbd_ref: Result<&mut SysBusDevice, &mut Object> = obj_ref.dynamic_cast_mut();
-    let obj_ref = sbd_ref.unwrap_err();
-
-    let dev_ref: Result<&mut DeviceState, &mut Object> = obj_ref.downcast_mut();
-    let dev_ref = dev_ref.unwrap();
-    assert_eq!(addr_of_mut!(*dev_ref), p.cast());
-
-    // SAFETY: the cast is wrong, but the value is only used for comparison
-    unsafe {
-        let sbd_ref: &mut SysBusDevice = obj_ref.unsafe_cast_mut();
-        assert_eq!(addr_of_mut!(*sbd_ref), p.cast());
-
-        object_unref(p_ref.as_object_mut_ptr().cast::<c_void>());
+        assert_eq!(addr_of!(*sbd_ref), p_ptr.cast());
     }
 }

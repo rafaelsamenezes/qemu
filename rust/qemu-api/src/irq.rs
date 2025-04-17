@@ -4,13 +4,19 @@
 
 //! Bindings for interrupt sources
 
-use core::ptr;
-use std::{marker::PhantomData, os::raw::c_int};
+use std::{ffi::CStr, marker::PhantomData, os::raw::c_int, ptr};
 
 use crate::{
-    bindings::{qemu_set_irq, IRQState},
+    bindings::{self, qemu_set_irq},
+    cell::Opaque,
     prelude::*,
+    qom::ObjectClass,
 };
+
+/// An opaque wrapper around [`bindings::IRQState`].
+#[repr(transparent)]
+#[derive(Debug, qemu_api_macros::Wrapper)]
+pub struct IRQState(Opaque<bindings::IRQState>);
 
 /// Interrupt sources are used by devices to pass changes to a value (typically
 /// a boolean).  The interrupt sink is usually an interrupt controller or
@@ -24,8 +30,7 @@ use crate::{
 ///
 /// Interrupts are implemented as a pointer to the interrupt "sink", which has
 /// type [`IRQState`].  A device exposes its source as a QOM link property using
-/// a function such as
-/// [`SysBusDevice::init_irq`](crate::sysbus::SysBusDevice::init_irq), and
+/// a function such as [`SysBusDeviceMethods::init_irq`], and
 /// initially leaves the pointer to a NULL value, representing an unconnected
 /// interrupt. To connect it, whoever creates the device fills the pointer with
 /// the sink's `IRQState *`, for example using `sysbus_connect_irq`.  Because
@@ -40,9 +45,12 @@ pub struct InterruptSource<T = bool>
 where
     c_int: From<T>,
 {
-    cell: BqlCell<*mut IRQState>,
+    cell: BqlCell<*mut bindings::IRQState>,
     _marker: PhantomData<T>,
 }
+
+// SAFETY: the implementation asserts via `BqlCell` that the BQL is taken
+unsafe impl<T> Sync for InterruptSource<T> where c_int: From<T> {}
 
 impl InterruptSource<bool> {
     /// Send a low (`false`) value to the interrupt sink.
@@ -76,8 +84,13 @@ where
         }
     }
 
-    pub(crate) const fn as_ptr(&self) -> *mut *mut IRQState {
+    pub(crate) const fn as_ptr(&self) -> *mut *mut bindings::IRQState {
         self.cell.as_ptr()
+    }
+
+    pub(crate) const fn slice_as_ptr(slice: &[Self]) -> *mut *mut bindings::IRQState {
+        assert!(!slice.is_empty());
+        slice[0].as_ptr()
     }
 }
 
@@ -89,3 +102,10 @@ impl Default for InterruptSource {
         }
     }
 }
+
+unsafe impl ObjectType for IRQState {
+    type Class = ObjectClass;
+    const TYPE_NAME: &'static CStr =
+        unsafe { CStr::from_bytes_with_nul_unchecked(bindings::TYPE_IRQ) };
+}
+qom_isa!(IRQState: Object);

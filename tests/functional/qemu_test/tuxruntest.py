@@ -24,17 +24,6 @@ class TuxRunBaselineTest(QemuSystemTest):
     # Tests are ~10-40s, allow for --debug/--enable-gcov overhead
     timeout = 100
 
-    def get_tag(self, tagname, default=None):
-        """
-        Get the metadata tag or return the default.
-        """
-        utag = self._get_unique_tag_val(tagname)
-        print(f"{tagname}/{default} -> {utag}")
-        if utag:
-            return utag
-
-        return default
-
     def setUp(self):
         super().setUp()
 
@@ -73,17 +62,7 @@ class TuxRunBaselineTest(QemuSystemTest):
         Fetch the TuxBoot assets.
         """
         kernel_image =  kernel_asset.fetch()
-        disk_image_zst = rootfs_asset.fetch()
-
-        disk_image = self.scratch_file("rootfs.ext4")
-
-        check_call(['zstd', "-f", "-d", disk_image_zst,
-                    "-o", disk_image],
-                   stdout=DEVNULL, stderr=DEVNULL)
-        # zstd copies source archive permissions for the output
-        # file, so must make this writable for QEMU
-        os.chmod(disk_image, stat.S_IRUSR | stat.S_IWUSR)
-
+        disk_image = self.uncompress(rootfs_asset)
         dtb = dtb_asset.fetch() if dtb_asset is not None else None
 
         return (kernel_image, disk_image, dtb)

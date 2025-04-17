@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #![cfg_attr(not(MESON), doc = include_str!("../README.md"))]
+#![deny(clippy::missing_const_for_fn)]
 
 #[rustfmt::skip]
 pub mod bindings;
@@ -12,16 +13,21 @@ pub mod bindings;
 #[rustfmt::skip]
 pub mod prelude;
 
+pub mod assertions;
 pub mod bitops;
 pub mod c_str;
 pub mod callbacks;
 pub mod cell;
+pub mod chardev;
+pub mod errno;
 pub mod irq;
+pub mod memory;
 pub mod module;
 pub mod offset_of;
 pub mod qdev;
 pub mod qom;
 pub mod sysbus;
+pub mod timer;
 pub mod vmstate;
 pub mod zeroable;
 

@@ -15,6 +15,7 @@ extern bool qemu_uuid_set;
 
 const char *qemu_get_vm_name(void);
 
+/* Exit notifiers will run with BQL held. */
 void qemu_add_exit_notifier(Notifier *notify);
 void qemu_remove_exit_notifier(Notifier *notify);
 
@@ -43,9 +44,19 @@ extern int display_opengl;
 extern const char *keyboard_layout;
 extern int old_param;
 extern uint8_t *boot_splash_filedata;
-extern bool enable_mlock;
 extern bool enable_cpu_pm;
 extern QEMUClockType rtc_clock;
+
+typedef enum {
+    MLOCK_OFF = 0,
+    MLOCK_ON,
+    MLOCK_ON_FAULT,
+} MlockState;
+
+bool should_mlock(MlockState);
+bool is_mlock_on_fault(MlockState);
+
+extern MlockState mlock_state;
 
 #define MAX_OPTION_ROMS 16
 typedef struct QEMUOptionRom {
